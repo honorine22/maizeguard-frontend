@@ -20,13 +20,13 @@ http://localhost:3000
 ## Environment
 
 ```text
-MODEL_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_MODEL_API_URL=http://127.0.0.1:8000
 ```
 
-For deployment, set `MODEL_API_URL` to your deployed backend base URL, for example:
+For deployment, set `NEXT_PUBLIC_MODEL_API_URL` to your deployed backend base URL, for example:
 
 ```text
-MODEL_API_URL=https://maizeguard-backend.onrender.com
+NEXT_PUBLIC_MODEL_API_URL=https://maizeguard-backend-419n.onrender.com/
 ```
 
 ## Deployment
@@ -41,5 +41,5 @@ Build command: npm run build
 Output: Next.js default
 ```
 
-Set the `MODEL_API_URL` environment variable before deploying.
+Set the `NEXT_PUBLIC_MODEL_API_URL` environment variable before deploying.
 # maizeguard-frontend

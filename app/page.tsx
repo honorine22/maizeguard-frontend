@@ -15,8 +15,11 @@ type Risk = "Low" | "Medium" | "High" | "Needs review";
 type AnalyzeResponse = {
   key?: QualityKey; label?: string; rawLabel?: string;
   confidence?: number; confidenceRaw?: number; confidencePercent?: number;
+  raw_label?: string; confidence_percent?: number;
   needsReview?: boolean; probabilities?: Record<string, number>;
-  risk?: Risk | string; action?: string; detail?: string; source?: string;
+  needs_review?: boolean; review_reason?: string | null;
+  risk?: Risk | string; action?: string; recommendation?: string;
+  detail?: string; source?: string;
 };
 
 type Scenario = {
@@ -30,6 +33,53 @@ type DisplayResult = Scenario & {
 };
 
 const MAX_MB = 8;
+const DEFAULT_MODEL_API_URL = "https://maizeguard-backend-419n.onrender.com/";
+const MODEL_API_URL =
+  process.env.NEXT_PUBLIC_MODEL_API_URL ?? DEFAULT_MODEL_API_URL;
+
+function modelPredictUrl() {
+  return MODEL_API_URL.endsWith("/predict")
+    ? MODEL_API_URL
+    : `${MODEL_API_URL.replace(/\/$/, "")}/predict`;
+}
+
+function normalizeQualityKey(label?: string): QualityKey | null {
+  const value = label?.toLowerCase().trim() ?? "";
+
+  if (
+    value.includes("good") ||
+    value.includes("healthy") ||
+    value.includes("normal")
+  ) {
+    return "good";
+  }
+
+  if (
+    value.includes("broken") ||
+    value.includes("damage") ||
+    value.includes("defect")
+  ) {
+    return "broken";
+  }
+
+  if (
+    value.includes("impurity") ||
+    value.includes("dirty") ||
+    value.includes("foreign")
+  ) {
+    return "impurity";
+  }
+
+  if (
+    value.includes("mold") ||
+    value.includes("rotten") ||
+    value.includes("fung")
+  ) {
+    return "mold";
+  }
+
+  return null;
+}
 
 const scenarios: Record<QualityKey, Scenario> = {
   good: {
@@ -71,7 +121,7 @@ const metrics = [
   { label: "Public sources", value: "3" },
   { label: "Classes mapped", value: "4" },
   { label: "Training stack", value: "PyTorch" },
-  { label: "API route", value: "Ready" },
+  { label: "Backend API", value: "Ready" },
 ];
 const datasetSources = [
   {
@@ -186,33 +236,38 @@ export default function Home() {
     try {
       const formData = new FormData();
       formData.append("image", file);
-      const response = await fetch("/api/analyze", { method: "POST", body: formData });
+      const response = await fetch(modelPredictUrl(), { method: "POST", body: formData });
       let apiResult: AnalyzeResponse = {};
       try { apiResult = (await response.json()) as AnalyzeResponse; } catch { apiResult = {}; }
+      const predicted = apiResult.key ?? normalizeQualityKey(apiResult.label ?? apiResult.raw_label);
 
-      if (!response.ok || !apiResult.key) {
+      if (!response.ok || !predicted) {
         setSelected(null);
         setAnalysisResult({
           label: "Needs review", confidence: 0, risk: "Needs review",
           action: "Model unavailable",
-          detail: apiResult.detail ?? "Start the model API and upload the image again.",
+          detail: apiResult.detail ?? apiResult.review_reason ?? "The backend model API did not return a usable prediction.",
           needsReview: true, tone: "warning",
         });
         setLastUpdated("Model API unavailable");
         return;
       }
-      const predicted = apiResult.key;
       const nextBase = scenarios[predicted];
-      const needsReview = apiResult.needsReview ?? false;
-      const confidence = apiResult.confidence ?? apiResult.confidencePercent;
+      const needsReview = apiResult.needsReview ?? apiResult.needs_review ?? false;
+      const confidence =
+        apiResult.confidencePercent ??
+        apiResult.confidence_percent ??
+        (typeof apiResult.confidence === "number" && apiResult.confidence <= 1
+          ? apiResult.confidence * 100
+          : apiResult.confidence);
       setSelected(predicted);
       setAnalysisResult({
         label: needsReview ? "Needs review" : apiResult.label ?? nextBase.label,
         confidence: typeof confidence === "number" ? Math.round(confidence) : nextBase.confidence,
         risk: needsReview ? "Needs review" : (apiResult.risk as Risk) ?? nextBase.risk,
         action: needsReview ? "Needs review" : apiResult.action ?? nextBase.action,
-        detail: apiResult.detail ?? nextBase.detail,
-        needsReview, rawLabel: apiResult.rawLabel ?? apiResult.label,
+        detail: apiResult.review_reason ?? apiResult.recommendation ?? apiResult.detail ?? nextBase.detail,
+        needsReview, rawLabel: apiResult.rawLabel ?? apiResult.raw_label ?? apiResult.label,
         probabilities: apiResult.probabilities, source: apiResult.source,
       });
       setLastUpdated(response.ok ? "Assessment completed" : "Preview assessment completed");
@@ -220,7 +275,7 @@ export default function Home() {
       setSelected(null);
       setAnalysisResult({
         label: "Needs review", confidence: 0, risk: "Needs review", action: "Needs review",
-        detail: "The model API is not reachable. Start the backend server and try again.",
+        detail: "The backend model API is not reachable. Check the Render service and CORS settings, then try again.",
         needsReview: true, tone: "warning",
       });
       setLastUpdated("Model API unavailable");

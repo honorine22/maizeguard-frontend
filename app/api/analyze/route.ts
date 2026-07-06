@@ -31,6 +31,10 @@ type ModelApiResponse = {
 function normalizeLabel(label: string): QualityKey | null {
   const value = label.toLowerCase().trim();
 
+  if (value.includes("needs_review") || value.includes("needs review")) {
+    return null;
+  }
+
   if (
     value.includes("good") ||
     value.includes("healthy") ||
@@ -123,9 +127,11 @@ export async function POST(request: Request) {
     }
 
     const result = (await response.json()) as ModelApiResponse;
-    const key = normalizeLabel(result.label);
+    const needsReview =
+      result.needs_review ?? result.needsReview ?? result.label === "needs_review";
+    const key = normalizeLabel(result.raw_label ?? result.label);
 
-    if (!key) {
+    if (!key && !needsReview) {
       return NextResponse.json(
         {
           error: "Unsupported model label.",
@@ -151,12 +157,9 @@ export async function POST(request: Request) {
         confidenceRaw * 100
     );
 
-    const needsReview =
-      result.needs_review ?? result.needsReview ?? false;
-
     return NextResponse.json({
-      key,
-      label: result.label,
+      key: key ?? "mold",
+      label: needsReview ? "Needs review" : result.label,
       rawLabel: result.raw_label ?? result.label,
       confidence: Math.round(confidencePercent),
       confidenceRaw,
