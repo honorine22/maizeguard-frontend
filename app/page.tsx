@@ -33,15 +33,6 @@ type DisplayResult = Scenario & {
 };
 
 const MAX_MB = 8;
-const DEFAULT_MODEL_API_URL = "https://maizeguard-backend-419n.onrender.com/";
-const MODEL_API_URL =
-  process.env.NEXT_PUBLIC_MODEL_API_URL ?? DEFAULT_MODEL_API_URL;
-
-function modelPredictUrl() {
-  return MODEL_API_URL.endsWith("/predict")
-    ? MODEL_API_URL
-    : `${MODEL_API_URL.replace(/\/$/, "")}/predict`;
-}
 
 function normalizeQualityKey(label?: string): QualityKey | null {
   const value = label?.toLowerCase().trim() ?? "";
@@ -236,7 +227,7 @@ export default function Home() {
     try {
       const formData = new FormData();
       formData.append("image", file);
-      const response = await fetch(modelPredictUrl(), { method: "POST", body: formData });
+      const response = await fetch("/api/analyze", { method: "POST", body: formData });
       let apiResult: AnalyzeResponse = {};
       try { apiResult = (await response.json()) as AnalyzeResponse; } catch { apiResult = {}; }
       const predicted = apiResult.key ?? normalizeQualityKey(apiResult.label ?? apiResult.raw_label);
