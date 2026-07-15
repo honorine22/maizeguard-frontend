@@ -9,8 +9,8 @@ import {
   Upload, WifiOff, X,
 } from "lucide-react";
 
-type QualityKey = "good" | "broken" | "impurity" | "mold";
-type Risk = "Low" | "Medium" | "High" | "Needs review";
+type QualityKey = "good" | "broken" | "impurity" | "mold" | "unsupported";
+type Risk = "Low" | "Medium" | "High" | "Needs review" | "Unsupported image";
 
 type AnalyzeResponse = {
   key?: QualityKey; label?: string; rawLabel?: string;
@@ -33,9 +33,89 @@ type DisplayResult = Scenario & {
 };
 
 const MAX_MB = 8;
+const MODEL_API_URL =
+  process.env.NEXT_PUBLIC_MODEL_API_URL ??
+  "https://honorineigiraneza-maizeguard-backend.hf.space";
+const MAX_ANALYSIS_IMAGE_SIDE = 1024;
+const ANALYSIS_IMAGE_QUALITY = 0.82;
+
+function modelPredictUrl() {
+  return MODEL_API_URL.endsWith("/predict")
+    ? MODEL_API_URL
+    : `${MODEL_API_URL.replace(/\/$/, "")}/predict`;
+}
+
+function loadImage(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Could not load image for analysis."));
+    image.src = src;
+  });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("Could not prepare image for analysis."));
+      },
+      "image/jpeg",
+      ANALYSIS_IMAGE_QUALITY
+    );
+  });
+}
+
+async function prepareImageForAnalysis(file: File) {
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    const image = await loadImage(objectUrl);
+    const scale = Math.min(
+      1,
+      MAX_ANALYSIS_IMAGE_SIDE / Math.max(image.naturalWidth, image.naturalHeight)
+    );
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      return file;
+    }
+
+    context.drawImage(image, 0, 0, width, height);
+    const blob = await canvasToBlob(canvas);
+
+    if (blob.size >= file.size) {
+      return file;
+    }
+
+    return new File(
+      [blob],
+      file.name.replace(/\.[^.]+$/, "") + "-analysis.jpg",
+      { type: "image/jpeg" }
+    );
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
 
 function normalizeQualityKey(label?: string): QualityKey | null {
   const value = label?.toLowerCase().trim() ?? "";
+
+  if (
+    value.includes("unsupported") ||
+    value.includes("not_maize") ||
+    value.includes("not maize") ||
+    value.includes("outside")
+  ) {
+    return "unsupported";
+  }
 
   if (
     value.includes("good") ||
@@ -100,6 +180,13 @@ const scenarios: Record<QualityKey, Scenario> = {
     detail: "Visible mold risk requires careful handling and further quality assessment.",
     priority: "Mold-risk evidence has the highest priority, even if some patches look good.",
     tone: "danger"
+  },
+  unsupported: {
+    label: "Unsupported image", shortLabel: "Unsupported", confidence: 0, risk: "Unsupported image",
+    action: "Upload maize image",
+    detail: "This image does not appear to show a maize sample. Upload a clear close-up photo of shelled maize.",
+    priority: "The app only screens visible maize quality and does not classify unrelated images.",
+    tone: "warning"
   },
 };
 
@@ -196,7 +283,7 @@ export default function Home() {
   const baseResult = scenarios[selected ?? "good"];
   const result: DisplayResult = {
     ...baseResult, ...analysisResult,
-    tone: analysisResult?.needsReview ? "warning" : analysisResult?.tone ?? baseResult.tone,
+    tone: analysisResult?.needsReview || selected === "unsupported" ? "warning" : analysisResult?.tone ?? baseResult.tone,
   };
   const tones = toneClasses(result.tone);
   const confidenceWidth = useMemo(() => `${result.confidence}%`, [result.confidence]);
@@ -226,8 +313,9 @@ export default function Home() {
 
     try {
       const formData = new FormData();
-      formData.append("image", file);
-      const response = await fetch("/api/analyze", { method: "POST", body: formData });
+      const analysisFile = await prepareImageForAnalysis(file);
+      formData.append("image", analysisFile, analysisFile.name);
+      const response = await fetch(modelPredictUrl(), { method: "POST", body: formData });
       let apiResult: AnalyzeResponse = {};
       try { apiResult = (await response.json()) as AnalyzeResponse; } catch { apiResult = {}; }
       const predicted = apiResult.key ?? normalizeQualityKey(apiResult.label ?? apiResult.raw_label);
@@ -255,8 +343,8 @@ export default function Home() {
       setAnalysisResult({
         label: needsReview ? "Needs review" : apiResult.label ?? nextBase.label,
         confidence: typeof confidence === "number" ? Math.round(confidence) : nextBase.confidence,
-        risk: needsReview ? "Needs review" : (apiResult.risk as Risk) ?? nextBase.risk,
-        action: needsReview ? "Needs review" : apiResult.action ?? nextBase.action,
+        risk: predicted === "unsupported" ? "Unsupported image" : needsReview ? "Needs review" : (apiResult.risk as Risk) ?? nextBase.risk,
+        action: predicted === "unsupported" ? "Upload maize image" : needsReview ? "Needs review" : apiResult.action ?? nextBase.action,
         detail: apiResult.review_reason ?? apiResult.recommendation ?? apiResult.detail ?? nextBase.detail,
         needsReview, rawLabel: apiResult.rawLabel ?? apiResult.raw_label ?? apiResult.label,
         probabilities: apiResult.probabilities, source: apiResult.source,
@@ -266,7 +354,7 @@ export default function Home() {
       setSelected(null);
       setAnalysisResult({
         label: "Needs review", confidence: 0, risk: "Needs review", action: "Needs review",
-        detail: "The backend model API is not reachable. Check the Render service and CORS settings, then try again.",
+        detail: "The backend model API is not reachable. Check the Hugging Face Space and CORS settings, then try again.",
         needsReview: true, tone: "warning",
       });
       setLastUpdated("Model API unavailable");

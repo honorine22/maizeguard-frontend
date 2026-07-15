@@ -10,7 +10,7 @@ function modelPredictUrl() {
     : `${MODEL_API_URL.replace(/\/$/, "")}/predict`;
 }
 
-type QualityKey = "good" | "broken" | "impurity" | "mold";
+type QualityKey = "good" | "broken" | "impurity" | "mold" | "unsupported";
 
 type ModelApiResponse = {
   label: string;
@@ -33,6 +33,15 @@ function normalizeLabel(label: string): QualityKey | null {
 
   if (value.includes("needs_review") || value.includes("needs review")) {
     return null;
+  }
+
+  if (
+    value.includes("unsupported") ||
+    value.includes("not_maize") ||
+    value.includes("not maize") ||
+    value.includes("outside")
+  ) {
+    return "unsupported";
   }
 
   if (
@@ -127,11 +136,15 @@ export async function POST(request: Request) {
     }
 
     const result = (await response.json()) as ModelApiResponse;
+    const unsupported = normalizeLabel(result.label) === "unsupported";
     const needsReview =
-      result.needs_review ?? result.needsReview ?? result.label === "needs_review";
+      unsupported
+        ? false
+        : result.needs_review ?? result.needsReview ?? result.label === "needs_review";
     const key = normalizeLabel(result.raw_label ?? result.label);
+    const responseKey = unsupported ? "unsupported" : key;
 
-    if (!key && !needsReview) {
+    if (!responseKey && !needsReview) {
       return NextResponse.json(
         {
           error: "Unsupported model label.",
@@ -158,8 +171,8 @@ export async function POST(request: Request) {
     );
 
     return NextResponse.json({
-      key: key ?? "mold",
-      label: needsReview ? "Needs review" : result.label,
+      key: responseKey ?? "mold",
+      label: unsupported ? "Unsupported image" : needsReview ? "Needs review" : result.label,
       rawLabel: result.raw_label ?? result.label,
       confidence: Math.round(confidencePercent),
       confidenceRaw,
@@ -167,8 +180,8 @@ export async function POST(request: Request) {
       needsReview,
       reviewReason: result.review_reason ?? null,
       probabilities: result.probabilities ?? {},
-      risk: needsReview ? "Needs review" : result.risk,
-      action: needsReview ? "Needs review" : result.action,
+      risk: unsupported ? "Unsupported image" : needsReview ? "Needs review" : result.risk,
+      action: unsupported ? "Upload maize image" : needsReview ? "Needs review" : result.action,
       detail:
         result.review_reason ??
         result.recommendation ??

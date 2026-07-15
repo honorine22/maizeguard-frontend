@@ -15,7 +15,7 @@ https://maizeguard-frontend-70xyc87wl-honorine22s-projects.vercel.app
 Backend model API:
 
 ```text
-https://maizeguard-backend-419n.onrender.com/
+https://honorineigiraneza-maizeguard-backend.hf.space/
 ```
 
 5-minute demo video: https://youtu.be/0U93bL54p_g
@@ -28,7 +28,7 @@ PASTE VIDEO LINK HERE
 
 - Upload maize images through a drag-and-drop or file-picker interface.
 - Validate uploaded files before analysis, including image type and maximum file size.
-- Send images through the Next.js `/api/analyze` route, which forwards them to the backend model API.
+- Resize/compress uploaded images in the browser and send them directly to the Hugging Face backend model API.
 - Display the predicted maize quality category.
 - Display model confidence and class probability evidence.
 - Show risk level and recommended action for the predicted result.
@@ -53,9 +53,9 @@ The application maps model predictions into four user-facing quality categories:
 | Frontend | Next.js 14, React 18, TypeScript |
 | Styling | Tailwind CSS, custom CSS |
 | Icons | Lucide React |
-| Model API | FastAPI backend deployed on Render |
+| Model API | FastAPI backend deployed on Hugging Face Spaces |
 | Model stack | PyTorch model API |
-| Deployment | Vercel frontend, Render backend |
+| Deployment | Vercel frontend, Hugging Face Spaces backend |
 
 ## Related Project Files
 
@@ -64,7 +64,7 @@ The application maps model predictions into four user-facing quality categories:
 | `app/page.tsx` | Main frontend interface, upload flow, backend API call, result rendering |
 | `app/globals.css` | Global styles, theme variables, responsive visual design |
 | `app/layout.tsx` | Root layout, metadata, fonts, favicon |
-| `app/api/analyze/route.ts` | Next.js proxy route that forwards uploads to the backend model API |
+| `app/api/analyze/route.ts` | Legacy Next.js proxy route kept for fallback/testing; the main frontend upload flow calls Hugging Face directly |
 | `public/` | Static images and favicon used by the frontend |
 | `.env.example` | Example environment variable for the backend model API URL |
 | `package.json` | Project scripts and dependencies |
@@ -96,19 +96,19 @@ cp .env.example .env.local
 Set the model API base URL:
 
 ```text
-MODEL_API_URL=https://maizeguard-backend-419n.onrender.com
+NEXT_PUBLIC_MODEL_API_URL=https://honorineigiraneza-maizeguard-backend.hf.space
 ```
 
 For a local backend, use:
 
 ```text
-MODEL_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_MODEL_API_URL=http://127.0.0.1:8000
 ```
 
 The frontend automatically sends uploads to:
 
 ```text
-/api/analyze -> <MODEL_API_URL>/predict
+<NEXT_PUBLIC_MODEL_API_URL>/predict
 ```
 
 ### 4. Start the development server
@@ -160,16 +160,16 @@ npm run build
 6. Add the environment variable in Vercel:
 
 ```text
-MODEL_API_URL=https://maizeguard-backend-419n.onrender.com
+NEXT_PUBLIC_MODEL_API_URL=https://honorineigiraneza-maizeguard-backend.hf.space
 ```
 
 7. Redeploy after adding or changing environment variables.
 8. Open the deployed frontend and upload maize test images.
-9. Confirm that the browser Network tab sends upload requests to `/api/analyze`; the server route then forwards to the Render backend `/predict` endpoint.
+9. Confirm that the browser Network tab sends upload requests directly to the Hugging Face backend `/predict` endpoint.
 
-### Backend deployment on Render
+### Backend deployment on Hugging Face Spaces
 
-The model API is deployed separately on Render. The frontend depends on the backend exposing:
+The model API is deployed separately on Hugging Face Spaces. The frontend depends on the backend exposing:
 
 ```text
 GET /
