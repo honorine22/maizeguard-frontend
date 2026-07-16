@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DragEvent, ReactNode } from "react";
 import {
   AlertTriangle, ArrowRight, BarChart3, Camera, CheckCircle2, ChevronDown,
@@ -9,8 +9,8 @@ import {
   Upload, WifiOff, X,
 } from "lucide-react";
 
-type QualityKey = "good" | "broken" | "impurity" | "mold_risk" | "unsupported_image";
-type Risk = "Low" | "Medium" | "High" | "Needs review" | "Unsupported image" | "Unclear";
+type QualityKey = "good" | "broken" | "impurity" | "mold_risk";
+type Risk = "Low" | "Medium" | "High" | "Needs review" | "Unclear";
 
 type AnalyzeResponse = {
   key?: QualityKey; label?: string; rawLabel?: string;
@@ -29,6 +29,16 @@ type ViewPrediction = {
   view: string;
   label: string;
   confidence: number;
+};
+
+type BackendStatus = "checking" | "online" | "offline";
+
+type UploadMeta = {
+  name: string;
+  type: string;
+  sizeKb: number;
+  width?: number;
+  height?: number;
 };
 
 type Scenario = {
@@ -65,7 +75,7 @@ function normalizeQualityKey(label?: string): QualityKey | null {
     value.includes("not maize") ||
     value.includes("outside")
   ) {
-    return "unsupported_image";
+    return null;
   }
 
   if (value.includes("needs_review") || value.includes("needs review")) {
@@ -135,13 +145,6 @@ const scenarios: Record<QualityKey, Scenario> = {
     detail: "Visible mold risk requires careful handling and further quality assessment.",
     priority: "Mold-risk evidence has the highest priority, even if some patches look good.",
     tone: "danger"
-  },
-  unsupported_image: {
-    label: "Unsupported image", shortLabel: "Unsupported", confidence: 0, risk: "Unsupported image",
-    action: "Upload maize image",
-    detail: "This image does not appear to show a maize sample. Upload a clear close-up photo of shelled maize.",
-    priority: "The app only screens visible maize quality and does not classify unrelated images.",
-    tone: "warning"
   },
 };
 
@@ -217,9 +220,44 @@ function isBackendReviewLabel(label?: string) {
   return value === "needs_review" || value === "needs review";
 }
 
+function isUnsupportedBackendLabel(label?: string) {
+  const value = label?.toLowerCase().trim() ?? "";
+  return (
+    value.includes("unsupported") ||
+    value.includes("not_maize") ||
+    value.includes("not maize") ||
+    value.includes("outside")
+  );
+}
+
 function resultRiskIsUnclear(risk?: Risk | string) {
   const value = risk?.toLowerCase().trim() ?? "";
   return value === "unclear" || value === "needs review";
+}
+
+function modelApiBaseUrl() {
+  return MODEL_API_URL.replace(/\/predict$/, "").replace(/\/$/, "");
+}
+
+function formatFileType(type: string) {
+  return type.replace("image/", "").toUpperCase() || "Image";
+}
+
+function readImageDimensions(file: File) {
+  return new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      const dimensions = { width: image.naturalWidth, height: image.naturalHeight };
+      URL.revokeObjectURL(objectUrl);
+      resolve(dimensions);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Could not read image dimensions."));
+    };
+    image.src = objectUrl;
+  });
 }
 
 export default function Home() {
@@ -231,6 +269,9 @@ export default function Home() {
   const [analysisResult, setAnalysisResult] = useState<Partial<DisplayResult> | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadMeta, setUploadMeta] = useState<UploadMeta | null>(null);
+  const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
+  const [backendModel, setBackendModel] = useState("MobileNetV3");
   const [evidenceOpen, setEvidenceOpen] = useState(true);
   const [navOpen, setNavOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
@@ -245,19 +286,54 @@ export default function Home() {
 
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkBackend() {
+      setBackendStatus("checking");
+      try {
+        const response = await fetch(modelApiBaseUrl(), { cache: "no-store" });
+        if (!response.ok) throw new Error("Backend health check failed.");
+        const result = (await response.json()) as { model?: string };
+        if (!cancelled) {
+          setBackendStatus("online");
+          setBackendModel(result.model ?? "MobileNetV3");
+        }
+      } catch {
+        if (!cancelled) setBackendStatus("offline");
+      }
+    }
+
+    void checkBackend();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const baseResult = scenarios[selected ?? "good"];
   const result: DisplayResult = {
     ...baseResult, ...analysisResult,
     tone:
       analysisResult?.needsReview ||
-      selected === "unsupported_image" ||
       resultRiskIsUnclear(analysisResult?.risk)
         ? "warning"
         : analysisResult?.tone ?? baseResult.tone,
   };
   const tones = toneClasses(result.tone);
-  const confidenceWidth = useMemo(() => `${result.confidence}%`, [result.confidence]);
   const showSkeleton = isAnalyzing && !analysisResult;
+  const backendStatusLabel =
+    backendStatus === "online"
+      ? "Backend online"
+      : backendStatus === "checking"
+        ? "Checking backend"
+        : "Backend offline";
+  const backendStatusClasses =
+    backendStatus === "online"
+      ? "border-success/25 bg-success/10 text-success"
+      : backendStatus === "checking"
+        ? "border-warning/25 bg-warning/10 text-warning"
+        : "border-danger/25 bg-danger/10 text-danger";
 
   const validateAndAnalyze = useCallback((file: File) => {
     setUploadError(null);
@@ -276,10 +352,21 @@ export default function Home() {
     setFileName(file.name);
     const nextPreview = URL.createObjectURL(file);
     setPreviewUrl((cur) => { if (cur) URL.revokeObjectURL(cur); return nextPreview; });
+    setUploadMeta({
+      name: file.name,
+      type: file.type,
+      sizeKb: Math.max(1, Math.round(file.size / 1024)),
+    });
     setAnalysisResult(null);
     setSelected(null);
     setIsAnalyzing(true);
     setLastUpdated("Assessing image…");
+
+    readImageDimensions(file)
+      .then((dimensions) => {
+        setUploadMeta((current) => current ? { ...current, ...dimensions } : current);
+      })
+      .catch(() => undefined);
 
     try {
       const formData = new FormData();
@@ -293,8 +380,9 @@ export default function Home() {
         apiResult.key ??
         normalizeQualityKey(backendLabel) ??
         normalizeQualityKey(backendRawLabel);
+      const isUnsupported = isUnsupportedBackendLabel(backendLabel) || isUnsupportedBackendLabel(backendRawLabel);
 
-      if (!response.ok || !predicted) {
+      if (!response.ok || (!predicted && !isUnsupported)) {
         setSelected(null);
         setAnalysisResult({
           label: "Needs review", confidence: 0, risk: "Needs review",
@@ -305,23 +393,23 @@ export default function Home() {
         setLastUpdated("Model API unavailable");
         return;
       }
-      const nextBase = scenarios[predicted];
-      const needsReview = apiResult.needsReview ?? apiResult.needs_review ?? false;
+      const nextBase = predicted ? scenarios[predicted] : scenarios.good;
+      const needsReview = isUnsupported || (apiResult.needsReview ?? apiResult.needs_review ?? false);
       const confidence =
         apiResult.confidencePercent ??
         apiResult.confidence_percent ??
         (typeof apiResult.confidence === "number" && apiResult.confidence <= 1
           ? apiResult.confidence * 100
           : apiResult.confidence);
-      setSelected(predicted);
+      setSelected(predicted ?? null);
       setAnalysisResult({
         label:
           needsReview || isBackendReviewLabel(apiResult.label)
             ? "Needs review"
             : formatModelLabel(apiResult.label ?? nextBase.label),
         confidence: typeof confidence === "number" ? Math.round(confidence) : nextBase.confidence,
-        risk: (apiResult.risk as Risk) ?? (needsReview ? "Needs review" : nextBase.risk),
-        action: apiResult.action ?? (needsReview ? "Needs review" : nextBase.action),
+        risk: isUnsupported ? "Needs review" : (apiResult.risk as Risk) ?? (needsReview ? "Needs review" : nextBase.risk),
+        action: isUnsupported ? "Upload a clear maize image" : apiResult.action ?? (needsReview ? "Needs review" : nextBase.action),
         detail: apiResult.recommendation ?? apiResult.review_reason ?? apiResult.detail ?? nextBase.detail,
         needsReview,
         rawLabel: backendRawLabel,
@@ -354,6 +442,7 @@ export default function Home() {
     setPreviewUrl(null);
     setFileName("sample-maize-batch.jpg");
     setAnalysisResult(null);
+    setUploadMeta(null);
     setSelected("good");
     setLastUpdated("Ready to assess");
     setUploadError(null);
@@ -477,16 +566,41 @@ export default function Home() {
                 Upload a batch photo and review the result.
               </h2>
             </div>
-            <span
-              role="status"
-              aria-live="polite"
-              className="inline-flex items-center gap-2 rounded-full border border-border bg-white px-4 py-2 text-sm font-semibold text-ink shadow-sm"
-            >
-              {isAnalyzing
-                ? <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                : <CheckCircle2 className="h-4 w-4 text-primary" />}
-              {lastUpdated}
-            </span>
+            <div className="flex flex-wrap justify-end gap-2">
+              <span
+                role="status"
+                aria-live="polite"
+                className="inline-flex items-center gap-2 rounded-full border border-border bg-white px-4 py-2 text-sm font-semibold text-ink shadow-sm"
+              >
+                {isAnalyzing
+                  ? <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  : <CheckCircle2 className="h-4 w-4 text-primary" />}
+                {lastUpdated}
+              </span>
+              <span className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-sm ${backendStatusClasses}`}>
+                {backendStatus === "checking"
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : backendStatus === "online"
+                    ? <CheckCircle2 className="h-4 w-4" />
+                    : <WifiOff className="h-4 w-4" />}
+                {backendStatusLabel}
+              </span>
+            </div>
+          </div>
+
+          <div className="mb-6 grid gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border border-border bg-white px-4 py-3 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-ink-soft">Model service</p>
+              <p className="mt-1 truncate text-sm font-semibold text-ink">{backendModel}</p>
+            </div>
+            <div className="rounded-2xl border border-border bg-white px-4 py-3 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-ink-soft">Integration</p>
+              <p className="mt-1 text-sm font-semibold text-ink">Direct backend upload</p>
+            </div>
+            <div className="rounded-2xl border border-border bg-white px-4 py-3 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-ink-soft">Image sent as</p>
+              <p className="mt-1 text-sm font-semibold text-ink">Original file</p>
+            </div>
           </div>
 
           <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
@@ -517,9 +631,6 @@ export default function Home() {
 
               {/* Sample chips first (lower commitment) */}
               <div className="mt-6">
-                <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-ink-soft">
-                  Test with a sample condition
-                </p>
                 <div className="flex flex-wrap gap-2">
                   {(Object.entries(scenarios) as [QualityKey, Scenario][]).map(([key, item]) => {
                     const isSelected = selected === key && !previewUrl;
@@ -579,7 +690,6 @@ export default function Home() {
                 <input ref={inputRef} className="sr-only" type="file" accept="image/*"
                   onChange={(e) => { const f = e.target.files?.[0]; if (f) validateAndAnalyze(f); }} />
               </label>
-
               {uploadError && (
                 <p role="alert" className="mt-3 flex items-center gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">
                   <AlertTriangle className="h-4 w-4" /> {uploadError}
@@ -639,11 +749,44 @@ export default function Home() {
                 </div>
               </div>
 
+              <div className="mt-6 rounded-2xl border border-border bg-surface-2 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-ink">Screening report</p>
+                  <span className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-ink-soft">
+                    Original image analyzed
+                  </span>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <ReportMetric label="Result" value={showSkeleton ? "Analyzing..." : result.label} />
+                  <ReportMetric label="Backend label" value={formatModelLabel(result.rawLabel ?? result.label)} />
+                  <ReportMetric label="Confidence" value={showSkeleton ? "Analyzing..." : `${result.confidence}%`} />
+                  <ReportMetric label="Risk" value={String(result.risk)} />
+                </div>
+                {(result.inputWidth && result.inputHeight) || result.reviewReason ? (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    {result.reviewReason ? (
+                      <ReportMetric label="Review note" value={result.reviewReason} />
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+
               {/* Action */}
               <div className={`mt-6 rounded-2xl border p-5 ${tones.panel}`}>
-                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">Recommended action</p>
-                <h4 className="mt-1.5 font-display text-2xl font-semibold leading-snug text-ink">{result.action}</h4>
-                <p className="mt-2 text-sm leading-6 text-ink-soft">{result.detail}</p>
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">Recommended action</p>
+                    <h4 className="mt-1.5 font-display text-2xl font-semibold leading-snug text-ink">{result.action}</h4>
+                    <p className="mt-2 text-sm leading-6 text-ink-soft">{result.detail}</p>
+                  </div>
+                  {previewUrl && (
+                    <button type="button" onClick={clearUpload}
+                      className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-border bg-white px-4 py-2 text-sm font-semibold text-ink shadow-sm transition hover:-translate-y-0.5 hover:border-primary/40 hover:text-primary">
+                      <RotateCcw className="h-4 w-4" />
+                      Analyze another
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Evidence (collapsible) */}
@@ -653,7 +796,7 @@ export default function Home() {
                   aria-expanded={evidenceOpen}
                   className="flex w-full items-center justify-between gap-3 p-5">
                   <span className="text-left">
-                    <span className="block text-[11px] font-bold uppercase tracking-[0.16em] text-ink">Model evidence</span>
+                    <span className="block text-[11px] font-bold uppercase tracking-[0.16em] text-ink">Backend model evidence</span>
                     <span className="mt-1 block text-sm text-ink-soft">
                       Top prediction: <span className="font-semibold text-ink">{formatModelLabel(result.rawLabel ?? result.label)}</span>
                     </span>
@@ -721,12 +864,11 @@ export default function Home() {
                 )}
               </div>
 
-
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              {/* <div className="mt-4 grid gap-3 sm:grid-cols-3">
                 <Step icon={<ClipboardCheck className="h-4 w-4" />} title="Assess" text="Image is uploaded and prepared." />
                 <Step icon={<LineChart className="h-4 w-4" />} title="Classify" text="The model checks visible quality." />
                 <Step icon={<Database className="h-4 w-4" />} title="Recommend" text="The result becomes an action." />
-              </div>
+              </div> */}
             </div>
           </div>
         </div>
@@ -868,6 +1010,15 @@ function Step({ icon, title, text }: { icon: ReactNode; title: string; text: str
       <div className="mb-3 grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary">{icon}</div>
       <p className="font-semibold text-ink">{title}</p>
       <p className="mt-1 text-xs leading-5 text-ink-soft">{text}</p>
+    </div>
+  );
+}
+
+function ReportMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-white px-3 py-3">
+      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-ink-soft">{label}</p>
+      <p className="mt-1 break-words text-sm font-semibold leading-5 text-ink">{value}</p>
     </div>
   );
 }
