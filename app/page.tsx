@@ -9,8 +9,8 @@ import {
   Upload, WifiOff, X,
 } from "lucide-react";
 
-type QualityKey = "good" | "broken" | "impurity" | "mold" | "unsupported";
-type Risk = "Low" | "Medium" | "High" | "Needs review" | "Unsupported image";
+type QualityKey = "good" | "broken" | "impurity" | "mold_risk" | "unsupported_image";
+type Risk = "Low" | "Medium" | "High" | "Needs review" | "Unsupported image" | "Unclear";
 
 type AnalyzeResponse = {
   key?: QualityKey; label?: string; rawLabel?: string;
@@ -19,7 +19,16 @@ type AnalyzeResponse = {
   needsReview?: boolean; probabilities?: Record<string, number>;
   needs_review?: boolean; review_reason?: string | null;
   risk?: Risk | string; action?: string; recommendation?: string;
+  input_width?: number; input_height?: number; inference_view?: string;
+  view_count?: number; view_predictions?: ViewPrediction[];
+  top2_margin?: number;
   detail?: string; source?: string;
+};
+
+type ViewPrediction = {
+  view: string;
+  label: string;
+  confidence: number;
 };
 
 type Scenario = {
@@ -30,79 +39,21 @@ type Scenario = {
 type DisplayResult = Scenario & {
   needsReview?: boolean; rawLabel?: string;
   probabilities?: Record<string, number>; source?: string;
+  reviewReason?: string | null;
+  inputWidth?: number; inputHeight?: number; inferenceView?: string;
+  viewCount?: number; viewPredictions?: ViewPrediction[];
+  top2Margin?: number;
 };
 
 const MAX_MB = 8;
 const MODEL_API_URL =
   process.env.NEXT_PUBLIC_MODEL_API_URL ??
   "https://honorineigiraneza-maizeguard-backend.hf.space";
-const MAX_ANALYSIS_IMAGE_SIDE = 1024;
-const ANALYSIS_IMAGE_QUALITY = 0.82;
 
 function modelPredictUrl() {
   return MODEL_API_URL.endsWith("/predict")
     ? MODEL_API_URL
     : `${MODEL_API_URL.replace(/\/$/, "")}/predict`;
-}
-
-function loadImage(src: string) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("Could not load image for analysis."));
-    image.src = src;
-  });
-}
-
-function canvasToBlob(canvas: HTMLCanvasElement) {
-  return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error("Could not prepare image for analysis."));
-      },
-      "image/jpeg",
-      ANALYSIS_IMAGE_QUALITY
-    );
-  });
-}
-
-async function prepareImageForAnalysis(file: File) {
-  const objectUrl = URL.createObjectURL(file);
-
-  try {
-    const image = await loadImage(objectUrl);
-    const scale = Math.min(
-      1,
-      MAX_ANALYSIS_IMAGE_SIDE / Math.max(image.naturalWidth, image.naturalHeight)
-    );
-    const width = Math.max(1, Math.round(image.naturalWidth * scale));
-    const height = Math.max(1, Math.round(image.naturalHeight * scale));
-
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d");
-
-    if (!context) {
-      return file;
-    }
-
-    context.drawImage(image, 0, 0, width, height);
-    const blob = await canvasToBlob(canvas);
-
-    if (blob.size >= file.size) {
-      return file;
-    }
-
-    return new File(
-      [blob],
-      file.name.replace(/\.[^.]+$/, "") + "-analysis.jpg",
-      { type: "image/jpeg" }
-    );
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
 }
 
 function normalizeQualityKey(label?: string): QualityKey | null {
@@ -114,7 +65,11 @@ function normalizeQualityKey(label?: string): QualityKey | null {
     value.includes("not maize") ||
     value.includes("outside")
   ) {
-    return "unsupported";
+    return "unsupported_image";
+  }
+
+  if (value.includes("needs_review") || value.includes("needs review")) {
+    return null;
   }
 
   if (
@@ -146,7 +101,7 @@ function normalizeQualityKey(label?: string): QualityKey | null {
     value.includes("rotten") ||
     value.includes("fung")
   ) {
-    return "mold";
+    return "mold_risk";
   }
 
   return null;
@@ -174,14 +129,14 @@ const scenarios: Record<QualityKey, Scenario> = {
     priority: "Impurity evidence is prioritized because foreign matter reduces batch value.",
     tone: "warning"
   },
-  mold: {
+  mold_risk: {
     label: "Visible mold-risk grain", shortLabel: "Mold risk", confidence: 91, risk: "High",
     action: "Do not store — refer for checking",
     detail: "Visible mold risk requires careful handling and further quality assessment.",
     priority: "Mold-risk evidence has the highest priority, even if some patches look good.",
     tone: "danger"
   },
-  unsupported: {
+  unsupported_image: {
     label: "Unsupported image", shortLabel: "Unsupported", confidence: 0, risk: "Unsupported image",
     action: "Upload maize image",
     detail: "This image does not appear to show a maize sample. Upload a clear close-up photo of shelled maize.",
@@ -225,7 +180,7 @@ const navItems = [
   { label: "Demo", href: "#data" },
 ];
 const priorityRules = [
-  { label: "Mold", tone: "bg-danger text-white" },
+  { label: "Mold risk", tone: "bg-danger text-white" },
   { label: "Impurity", tone: "bg-primary text-primary-foreground" },
   { label: "Broken", tone: "bg-warning text-white" },
   { label: "Good", tone: "bg-success text-white" },
@@ -257,6 +212,16 @@ const topProbabilities = (p?: Record<string, number>) =>
     .sort(([, a], [, b]) => b - a).slice(0, 4)
     .map(([label, value]) => ({ label, percent: Math.round(value * 100) }));
 
+function isBackendReviewLabel(label?: string) {
+  const value = label?.toLowerCase().trim() ?? "";
+  return value === "needs_review" || value === "needs review";
+}
+
+function resultRiskIsUnclear(risk?: Risk | string) {
+  const value = risk?.toLowerCase().trim() ?? "";
+  return value === "unclear" || value === "needs review";
+}
+
 export default function Home() {
   const [selected, setSelected] = useState<QualityKey | null>("good");
   const [fileName, setFileName] = useState("sample-maize-batch.jpg");
@@ -283,7 +248,12 @@ export default function Home() {
   const baseResult = scenarios[selected ?? "good"];
   const result: DisplayResult = {
     ...baseResult, ...analysisResult,
-    tone: analysisResult?.needsReview || selected === "unsupported" ? "warning" : analysisResult?.tone ?? baseResult.tone,
+    tone:
+      analysisResult?.needsReview ||
+      selected === "unsupported_image" ||
+      resultRiskIsUnclear(analysisResult?.risk)
+        ? "warning"
+        : analysisResult?.tone ?? baseResult.tone,
   };
   const tones = toneClasses(result.tone);
   const confidenceWidth = useMemo(() => `${result.confidence}%`, [result.confidence]);
@@ -313,12 +283,16 @@ export default function Home() {
 
     try {
       const formData = new FormData();
-      const analysisFile = await prepareImageForAnalysis(file);
-      formData.append("image", analysisFile, analysisFile.name);
+      formData.append("image", file, file.name);
       const response = await fetch(modelPredictUrl(), { method: "POST", body: formData });
       let apiResult: AnalyzeResponse = {};
       try { apiResult = (await response.json()) as AnalyzeResponse; } catch { apiResult = {}; }
-      const predicted = apiResult.key ?? normalizeQualityKey(apiResult.label ?? apiResult.raw_label);
+      const backendLabel = apiResult.label ?? apiResult.raw_label;
+      const backendRawLabel = apiResult.raw_label ?? apiResult.rawLabel ?? apiResult.label;
+      const predicted =
+        apiResult.key ??
+        normalizeQualityKey(backendLabel) ??
+        normalizeQualityKey(backendRawLabel);
 
       if (!response.ok || !predicted) {
         setSelected(null);
@@ -341,13 +315,25 @@ export default function Home() {
           : apiResult.confidence);
       setSelected(predicted);
       setAnalysisResult({
-        label: needsReview ? "Needs review" : apiResult.label ?? nextBase.label,
+        label:
+          needsReview || isBackendReviewLabel(apiResult.label)
+            ? "Needs review"
+            : formatModelLabel(apiResult.label ?? nextBase.label),
         confidence: typeof confidence === "number" ? Math.round(confidence) : nextBase.confidence,
-        risk: predicted === "unsupported" ? "Unsupported image" : needsReview ? "Needs review" : (apiResult.risk as Risk) ?? nextBase.risk,
-        action: predicted === "unsupported" ? "Upload maize image" : needsReview ? "Needs review" : apiResult.action ?? nextBase.action,
-        detail: apiResult.review_reason ?? apiResult.recommendation ?? apiResult.detail ?? nextBase.detail,
-        needsReview, rawLabel: apiResult.rawLabel ?? apiResult.raw_label ?? apiResult.label,
-        probabilities: apiResult.probabilities, source: apiResult.source,
+        risk: (apiResult.risk as Risk) ?? (needsReview ? "Needs review" : nextBase.risk),
+        action: apiResult.action ?? (needsReview ? "Needs review" : nextBase.action),
+        detail: apiResult.recommendation ?? apiResult.review_reason ?? apiResult.detail ?? nextBase.detail,
+        needsReview,
+        rawLabel: backendRawLabel,
+        probabilities: apiResult.probabilities,
+        source: "model-api",
+        reviewReason: apiResult.review_reason ?? null,
+        inputWidth: apiResult.input_width,
+        inputHeight: apiResult.input_height,
+        inferenceView: apiResult.inference_view,
+        viewCount: apiResult.view_count,
+        viewPredictions: apiResult.view_predictions,
+        top2Margin: apiResult.top2_margin,
       });
       setLastUpdated(response.ok ? "Assessment completed" : "Preview assessment completed");
     } catch {
@@ -696,6 +682,40 @@ export default function Home() {
                       <p className="text-sm leading-6 text-ink-soft">
                         Upload a photo to show class probabilities from the model API.
                       </p>
+                    )}
+                    {(result.inferenceView || result.viewPredictions?.length || result.top2Margin !== undefined) && (
+                      <div className="mt-5 rounded-xl border border-border bg-surface-2 p-4">
+                        <div className="grid gap-3 text-xs text-ink-soft sm:grid-cols-3">
+                          {result.inferenceView && (
+                            <div>
+                              <p className="font-bold uppercase tracking-[0.12em] text-ink">View</p>
+                              <p className="mt-1">{formatModelLabel(result.inferenceView)}</p>
+                            </div>
+                          )}
+                          {result.viewCount !== undefined && (
+                            <div>
+                              <p className="font-bold uppercase tracking-[0.12em] text-ink">Checks</p>
+                              <p className="mt-1">{result.viewCount} image view{result.viewCount === 1 ? "" : "s"}</p>
+                            </div>
+                          )}
+                          {result.top2Margin !== undefined && (
+                            <div>
+                              <p className="font-bold uppercase tracking-[0.12em] text-ink">Top-2 margin</p>
+                              <p className="mt-1">{Math.round(result.top2Margin * 100)}%</p>
+                            </div>
+                          )}
+                        </div>
+                        {result.viewPredictions?.length ? (
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {result.viewPredictions.map((view) => (
+                              <span key={`${view.view}-${view.label}`}
+                                className="rounded-full border border-border bg-white px-3 py-1.5 text-xs font-semibold text-ink">
+                                {formatModelLabel(view.view)}: {formatModelLabel(view.label)} · {Math.round(view.confidence * 100)}%
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
                     )}
                   </div>
                 )}

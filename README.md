@@ -28,7 +28,7 @@ PASTE VIDEO LINK HERE
 
 - Upload maize images through a drag-and-drop or file-picker interface.
 - Validate uploaded files before analysis, including image type and maximum file size.
-- Resize/compress uploaded images in the browser and send them directly to the Hugging Face backend model API.
+- Send the original uploaded image directly to the Hugging Face backend model API.
 - Display the predicted maize quality category.
 - Display model confidence and class probability evidence.
 - Show risk level and recommended action for the predicted result.
@@ -61,10 +61,9 @@ The application maps model predictions into four user-facing quality categories:
 
 | File or folder | Purpose |
 | --- | --- |
-| `app/page.tsx` | Main frontend interface, upload flow, backend API call, result rendering |
+| `app/page.tsx` | Main frontend interface, upload flow, direct Hugging Face API call, result rendering |
 | `app/globals.css` | Global styles, theme variables, responsive visual design |
 | `app/layout.tsx` | Root layout, metadata, fonts, favicon |
-| `app/api/analyze/route.ts` | Legacy Next.js proxy route kept for fallback/testing; the main frontend upload flow calls Hugging Face directly |
 | `public/` | Static images and favicon used by the frontend |
 | `.env.example` | Example environment variable for the backend model API URL |
 | `package.json` | Project scripts and dependencies |
