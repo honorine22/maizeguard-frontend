@@ -61,7 +61,10 @@ The application maps model predictions into four user-facing quality categories:
 
 | File or folder | Purpose |
 | --- | --- |
-| `app/page.tsx` | Main frontend interface, upload flow, direct Hugging Face API call, result rendering |
+| `app/page.tsx` | Main page state, upload workflow, and page layout |
+| `app/lib/maizeguard.ts` | Typed MaizeGuard domain models, API URL helpers, response normalization, and display data |
+| `app/components/AssessmentWidgets.tsx` | Reusable result widgets such as confidence ring and report metric cards |
+| `app/components/Navbar.tsx` | Reusable navigation component |
 | `app/globals.css` | Global styles, theme variables, responsive visual design |
 | `app/layout.tsx` | Root layout, metadata, fonts, favicon |
 | `public/` | Static images and favicon used by the frontend |
@@ -135,6 +138,17 @@ Open:
 ```text
 http://localhost:3000
 ```
+
+## Code Quality Notes
+
+The frontend is split into page, component, and domain-helper modules:
+
+- `app/page.tsx` handles screen state, upload events, and section layout.
+- `app/lib/maizeguard.ts` keeps model response types, class mappings, URL helpers, and result normalization helpers separate from JSX.
+- `app/components/AssessmentWidgets.tsx` contains reusable presentation widgets.
+- `app/components/Navbar.tsx` contains navigation.
+
+This keeps the main interface easier to maintain than a single monolithic page file.
 
 ## Deployment Plan And Execution
 

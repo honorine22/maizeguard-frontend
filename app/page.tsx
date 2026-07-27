@@ -1,259 +1,39 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DragEvent, ReactNode } from "react";
+import type { DragEvent } from "react";
 import {
   AlertTriangle, ArrowRight, BarChart3, Camera, CheckCircle2, ChevronDown,
-  ClipboardCheck, Database, ExternalLink, FileImage, FlaskConical, Layers3,
-  Leaf, LineChart, Loader2, Menu, PackageCheck, PlayCircle, RotateCcw,
+  ExternalLink, FileImage, FlaskConical, Layers3,
+  Leaf, Loader2, PackageCheck, PlayCircle, RotateCcw,
   Upload, WifiOff, X,
 } from "lucide-react";
 import { Navbar } from "./components/Navbar";
-
-type QualityKey = "good" | "broken" | "impurity" | "mold_risk";
-type Risk = "Low" | "Medium" | "High" | "Needs review" | "Unclear";
-
-type AnalyzeResponse = {
-  key?: QualityKey; label?: string; rawLabel?: string;
-  confidence?: number; confidenceRaw?: number; confidencePercent?: number;
-  raw_label?: string; confidence_percent?: number;
-  needsReview?: boolean; probabilities?: Record<string, number>;
-  needs_review?: boolean; review_reason?: string | null;
-  risk?: Risk | string; action?: string; recommendation?: string;
-  input_width?: number; input_height?: number; inference_view?: string;
-  view_count?: number; view_predictions?: ViewPrediction[];
-  top2_margin?: number;
-  detail?: string; source?: string;
-};
-
-type ViewPrediction = {
-  view: string;
-  label: string;
-  confidence: number;
-};
-
-type BackendStatus = "checking" | "online" | "offline";
-
-type UploadMeta = {
-  name: string;
-  type: string;
-  sizeKb: number;
-  width?: number;
-  height?: number;
-};
-
-type Scenario = {
-  label: string; shortLabel: string; confidence: number; risk: Risk;
-  action: string; detail: string; priority: string;
-  tone: "success" | "warning" | "danger";
-};
-type DisplayResult = Scenario & {
-  needsReview?: boolean; rawLabel?: string;
-  probabilities?: Record<string, number>; source?: string;
-  reviewReason?: string | null;
-  inputWidth?: number; inputHeight?: number; inferenceView?: string;
-  viewCount?: number; viewPredictions?: ViewPrediction[];
-  top2Margin?: number;
-};
-
-const MAX_MB = 8;
-const MODEL_API_URL =
-  process.env.NEXT_PUBLIC_MODEL_API_URL ??
-  "https://honorineigiraneza-maizeguard-backend.hf.space";
-
-function modelPredictUrl() {
-  return MODEL_API_URL.endsWith("/predict")
-    ? MODEL_API_URL
-    : `${MODEL_API_URL.replace(/\/$/, "")}/predict`;
-}
-
-function normalizeQualityKey(label?: string): QualityKey | null {
-  const value = label?.toLowerCase().trim() ?? "";
-
-  if (
-    value.includes("unsupported") ||
-    value.includes("not_maize") ||
-    value.includes("not maize") ||
-    value.includes("outside")
-  ) {
-    return null;
-  }
-
-  if (value.includes("needs_review") || value.includes("needs review")) {
-    return null;
-  }
-
-  if (
-    value.includes("good") ||
-    value.includes("healthy") ||
-    value.includes("normal")
-  ) {
-    return "good";
-  }
-
-  if (
-    value.includes("broken") ||
-    value.includes("damage") ||
-    value.includes("defect")
-  ) {
-    return "broken";
-  }
-
-  if (
-    value.includes("impurity") ||
-    value.includes("dirty") ||
-    value.includes("foreign")
-  ) {
-    return "impurity";
-  }
-
-  if (
-    value.includes("mold") ||
-    value.includes("rotten") ||
-    value.includes("fung")
-  ) {
-    return "mold_risk";
-  }
-
-  return null;
-}
-
-const scenarios: Record<QualityKey, Scenario> = {
-  good: {
-    label: "Good maize grain", shortLabel: "Good", confidence: 94, risk: "Low",
-    action: "Store safely or prepare for sale",
-    detail: "The batch appears clean and suitable for normal storage with routine monitoring.",
-    priority: "Classified as good only when most checks agree and no strong risk evidence appears.",
-    tone: "success"
-  },
-  broken: {
-    label: "Broken or damaged grain", shortLabel: "Broken", confidence: 87, risk: "Medium",
-    action: "Sort before storage",
-    detail: "Remove visibly damaged kernels before storage or sale to reduce rejection risk.",
-    priority: "Broken kernels receive priority over good maize when enough patch evidence is detected.",
-    tone: "warning"
-  },
-  impurity: {
-    label: "Impurity-contaminated grain", shortLabel: "Impurity", confidence: 89, risk: "Medium",
-    action: "Clean and re-screen",
-    detail: "Separate stones, husks, dust and foreign matter before aggregation or sale.",
-    priority: "Impurity evidence is prioritized because foreign matter reduces batch value.",
-    tone: "warning"
-  },
-  mold_risk: {
-    label: "Visible mold-risk grain", shortLabel: "Mold risk", confidence: 91, risk: "High",
-    action: "Do not store — refer for checking",
-    detail: "Visible mold risk requires careful handling and further quality assessment.",
-    priority: "Mold-risk evidence has the highest priority, even if some patches look good.",
-    tone: "danger"
-  },
-};
-
-const history = [
-  { site: "Kayonza cooperative", result: "Good maize grain", risk: "Low" as Risk, time: "09:12" },
-  { site: "Nyagatare market", result: "Impurity-contaminated", risk: "Medium" as Risk, time: "10:25" },
-  { site: "Local sample test", result: "Visible mold-risk grain", risk: "High" as Risk, time: "11:04" },
-];
-const metrics = [
-  { label: "Public sources", value: "3" },
-  { label: "Classes mapped", value: "4" },
-  { label: "Training stack", value: "PyTorch" },
-  { label: "Backend API", value: "Ready" },
-];
-const datasetSources = [
-  {
-    name: "CK-CNN", purpose: "Good / defective / impurity",
-    detail: "Main public dataset for kernel-level quality categories used in training.",
-    href: "https://github.com/vision-cidis/CK-CNNLW"
-  },
-  {
-    name: "GrainSet maize", purpose: "Visual grain quality",
-    detail: "Additional maize grain data used to support public-only training.",
-    href: "https://pmc.ncbi.nlm.nih.gov/articles/PMC10632488/"
-  },
-  {
-    name: "EfficientMaize", purpose: "Good / bad support",
-    detail: "Used as extra good and broad bad maize support, without forcing unclear labels.",
-    href: "https://data.mendeley.com/datasets/r6vvm5jkh6/1"
-  },
-];
-const priorityRules = [
-  { label: "Mold risk", tone: "bg-danger text-white" },
-  { label: "Impurity", tone: "bg-primary text-primary-foreground" },
-  { label: "Broken", tone: "bg-warning text-white" },
-  { label: "Good", tone: "bg-success text-white" },
-];
-
-function toneClasses(tone: Scenario["tone"]) {
-  if (tone === "success") return {
-    chip: "bg-success/10 text-success border-success/25",
-    ring: "stroke-success", icon: "bg-success/10 text-success",
-    panel: "border-success/20 bg-success/5",
-  };
-  if (tone === "danger") return {
-    chip: "bg-danger/10 text-danger border-danger/25",
-    ring: "stroke-danger", icon: "bg-danger/10 text-danger",
-    panel: "border-danger/20 bg-danger/5",
-  };
-  return {
-    chip: "bg-warning/10 text-warning border-warning/25",
-    ring: "stroke-warning", icon: "bg-warning/10 text-warning",
-    panel: "border-warning/20 bg-warning/5",
-  };
-}
-
-const formatModelLabel = (l?: string) =>
-  !l ? "Not available" : l.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-
-const topProbabilities = (p?: Record<string, number>) =>
-  Object.entries(p ?? {})
-    .sort(([, a], [, b]) => b - a).slice(0, 4)
-    .map(([label, value]) => ({ label, percent: Math.round(value * 100) }));
-
-function isBackendReviewLabel(label?: string) {
-  const value = label?.toLowerCase().trim() ?? "";
-  return value === "needs_review" || value === "needs review";
-}
-
-function isUnsupportedBackendLabel(label?: string) {
-  const value = label?.toLowerCase().trim() ?? "";
-  return (
-    value.includes("unsupported") ||
-    value.includes("not_maize") ||
-    value.includes("not maize") ||
-    value.includes("outside")
-  );
-}
-
-function resultRiskIsUnclear(risk?: Risk | string) {
-  const value = risk?.toLowerCase().trim() ?? "";
-  return value === "unclear" || value === "needs review";
-}
-
-function modelApiBaseUrl() {
-  return MODEL_API_URL.replace(/\/predict$/, "").replace(/\/$/, "");
-}
-
-function formatFileType(type: string) {
-  return type.replace("image/", "").toUpperCase() || "Image";
-}
-
-function readImageDimensions(file: File) {
-  return new Promise<{ width: number; height: number }>((resolve, reject) => {
-    const objectUrl = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      const dimensions = { width: image.naturalWidth, height: image.naturalHeight };
-      URL.revokeObjectURL(objectUrl);
-      resolve(dimensions);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error("Could not read image dimensions."));
-    };
-    image.src = objectUrl;
-  });
-}
+import { ConfidenceRing, ReportMetric } from "./components/AssessmentWidgets";
+import {
+  MAX_MB,
+  datasetSources,
+  formatModelLabel,
+  history,
+  isBackendReviewLabel,
+  isUnsupportedBackendLabel,
+  metrics,
+  modelApiBaseUrl,
+  modelPredictUrl,
+  normalizeQualityKey,
+  priorityRules,
+  readImageDimensions,
+  resultRiskIsUnclear,
+  scenarios,
+  toneClasses,
+  topProbabilities,
+  type AnalyzeResponse,
+  type BackendStatus,
+  type DisplayResult,
+  type QualityKey,
+  type Risk,
+  type UploadMeta,
+} from "./lib/maizeguard";
 
 export default function Home() {
   const [selected, setSelected] = useState<QualityKey | null>("good");
@@ -896,49 +676,5 @@ export default function Home() {
         </div>
       </footer>
     </main>
-  );
-}
-
-function ConfidenceRing({ percent, className, loading }:
-  { percent: number; className: string; loading?: boolean }) {
-  const r = 28, c = 2 * Math.PI * r;
-  const offset = c - (percent / 100) * c;
-  return (
-    <div className="relative h-20 w-20 shrink-0">
-      <svg viewBox="0 0 64 64" className="h-full w-full -rotate-90">
-        <circle cx="32" cy="32" r={r} className="fill-none stroke-muted" strokeWidth="6" />
-        <circle cx="32" cy="32" r={r}
-          className={`fill-none transition-all duration-700 ${className}`}
-          strokeWidth="6" strokeLinecap="round"
-          strokeDasharray={c} strokeDashoffset={loading ? c : offset} />
-      </svg>
-      <div className="absolute inset-0 grid place-items-center">
-        <div className="text-center">
-          <div className="font-display text-lg font-semibold leading-none text-ink tabular-nums">
-            {loading ? "–" : `${percent}%`}
-          </div>
-          <div className="mt-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-ink-soft">conf</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Step({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
-  return (
-    <div className="rounded-2xl border border-border bg-surface-2 p-4">
-      <div className="mb-3 grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary">{icon}</div>
-      <p className="font-semibold text-ink">{title}</p>
-      <p className="mt-1 text-xs leading-5 text-ink-soft">{text}</p>
-    </div>
-  );
-}
-
-function ReportMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-white px-3 py-3">
-      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-ink-soft">{label}</p>
-      <p className="mt-1 break-words text-sm font-semibold leading-5 text-ink">{value}</p>
-    </div>
   );
 }
