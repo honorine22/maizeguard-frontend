@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowRight, Leaf, Menu, X } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { ArrowRight, ChevronDown, Globe2, Leaf, Menu, X } from "lucide-react";
+import { SupabaseAuthButtons } from "./SupabaseAuthButtons";
+
+type Language = "en" | "rw" | "fr";
 
 type NavbarProps = {
   /**
@@ -9,18 +13,58 @@ type NavbarProps = {
    * The logo text, navigation labels, and mobile menu icon will be black.
    */
   darkText?: boolean;
+  copy?: Partial<NavbarCopy>;
+  language?: Language;
+  onLanguageChange?: (language: Language) => void;
 };
 
-export function Navbar({ darkText = false }: NavbarProps) {
+type NavbarCopy = {
+  home: string;
+  dashboard: string;
+  data: string;
+  assessSample: string;
+};
+
+const defaultCopy: NavbarCopy = {
+  home: "Home",
+  dashboard: "Dashboard",
+  data: "Data",
+  assessSample: "Assess sample",
+};
+
+const languageNames: Record<Language, string> = {
+  en: "EN",
+  rw: "RW",
+  fr: "FR",
+};
+
+function isLanguage(value: string | null): value is Language {
+  return value === "en" || value === "rw" || value === "fr";
+}
+
+export function Navbar({
+  darkText = false,
+  copy: copyOverride,
+  language: controlledLanguage,
+  onLanguageChange,
+}: NavbarProps) {
+  const copy = { ...defaultCopy, ...copyOverride };
+  const pathname = usePathname();
   const [navOpen, setNavOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [internalLanguage, setInternalLanguage] = useState<Language>("en");
+  const language = controlledLanguage ?? internalLanguage;
 
   const navItems = [
-    { label: "Project", href: "/#project" },
-    { label: "How it works", href: "/#scan" },
-    { label: "Workflow", href: "/#results" },
-    { label: "Demo", href: "/#data" },
+    { label: copy.home, href: "/#project" },
+    { label: copy.dashboard, href: "/dashboard" },
+    { label: copy.data, href: "/#data" },
   ];
+  const visibleNavItems = navItems.filter((item) => {
+    if (pathname === "/" && item.href === "/#project") return false;
+    if (pathname === "/dashboard" && item.href === "/dashboard") return false;
+    return true;
+  });
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 24);
@@ -30,6 +74,19 @@ export function Navbar({ darkText = false }: NavbarProps) {
 
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
+  useEffect(() => {
+    if (controlledLanguage) return;
+
+    const stored = window.localStorage.getItem("maizeguard-language");
+    if (isLanguage(stored)) setInternalLanguage(stored);
+  }, [controlledLanguage]);
+
+  function changeLanguage(nextLanguage: Language) {
+    if (!controlledLanguage) setInternalLanguage(nextLanguage);
+    window.localStorage.setItem("maizeguard-language", nextLanguage);
+    onLanguageChange?.(nextLanguage);
+  }
 
   /*
    * When the navbar has scrolled, the background becomes dark,
@@ -71,7 +128,7 @@ export function Navbar({ darkText = false }: NavbarProps) {
             showDarkText ? "text-black/75" : "text-white/85"
           }`}
         >
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <a
               key={item.href}
               href={item.href}
@@ -87,12 +144,21 @@ export function Navbar({ darkText = false }: NavbarProps) {
         </nav>
 
         <div className="flex items-center gap-2">
+          <LanguageSelector
+            language={language}
+            onChange={changeLanguage}
+            darkText={showDarkText}
+            className="hidden md:flex"
+          />
+
+          <SupabaseAuthButtons darkText={showDarkText} />
+
           {/* CTA */}
           <a
-            href="/#scan"
+            href="/dashboard/scan"
             className="hidden items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-white shadow-lg transition hover:bg-[#2d7447] md:inline-flex"
           >
-            View demo
+            {copy.assessSample}
             <ArrowRight className="h-4 w-4" />
           </a>
 
@@ -127,7 +193,10 @@ export function Navbar({ darkText = false }: NavbarProps) {
           }`}
         >
           <nav className="mx-auto flex max-w-7xl flex-col px-5 py-3">
-            {navItems.map((item) => (
+            <div className="border-b border-inherit py-3">
+              <LanguageSelector language={language} onChange={changeLanguage} darkText={showDarkText} />
+            </div>
+            {visibleNavItems.map((item) => (
               <a
                 key={item.href}
                 href={item.href}
@@ -141,9 +210,45 @@ export function Navbar({ darkText = false }: NavbarProps) {
                 {item.label}
               </a>
             ))}
+            <div className="py-3">
+              <SupabaseAuthButtons darkText={showDarkText} mobile />
+            </div>
           </nav>
         </div>
       )}
     </header>
+  );
+}
+
+function LanguageSelector({
+  language,
+  onChange,
+  darkText,
+  className = "",
+}: {
+  language: Language;
+  onChange: (language: Language) => void;
+  darkText: boolean;
+  className?: string;
+}) {
+  const tone = darkText
+    ? "border-black/10 bg-white text-black shadow-sm"
+    : "border-white/15 bg-white/10 text-white shadow-lg shadow-black/10 backdrop-blur";
+
+  return (
+    <label className={`relative flex min-w-[5.75rem] items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-bold ${tone} ${className}`}>
+      <Globe2 className="h-4 w-4 shrink-0" />
+      <select
+        value={language}
+        onChange={(event) => onChange(event.target.value as Language)}
+        className="min-w-0 flex-1 appearance-none bg-transparent pr-6 font-bold outline-none [&>option]:text-ink"
+        aria-label="Language"
+      >
+        <option value="en">{languageNames.en}</option>
+        <option value="rw">{languageNames.rw}</option>
+        <option value="fr">{languageNames.fr}</option>
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-3 h-4 w-4 shrink-0 opacity-80" />
+    </label>
   );
 }

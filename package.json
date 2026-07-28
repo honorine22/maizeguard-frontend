@@ -3,12 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "clean": "node scripts/clear-next-cache.mjs",
+    "predev": "node scripts/clear-next-cache.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/clear-next-cache.mjs",
     "build": "next build",
     "start": "next start",
+    "test": "vitest run",
     "lint": "next lint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.8",
     "lucide-react": "^0.468.0",
     "next": "^14.2.15",
     "react": "^18.3.1",
@@ -23,6 +28,7 @@
     "eslint-config-next": "^14.2.15",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.14",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.10"
   }
 }

@@ -72,7 +72,21 @@ export const MAX_MB = 8;
 
 export const MODEL_API_URL =
   process.env.NEXT_PUBLIC_MODEL_API_URL ??
+  process.env.MODEL_API_URL ??
   "https://honorineigiraneza-maizeguard-backend.hf.space";
+
+export function sanitizeModelApiUrl(url: string) {
+  return url.trim()
+    .replace("http://0.0.0.0", "http://127.0.0.1")
+    .replace("https://0.0.0.0", "https://127.0.0.1")
+    .replace(/\/docs\/?$/, "")
+    .replace(/\/redoc\/?$/, "")
+    .replace(/\/openapi\.json\/?$/, "");
+}
+
+export function normalizedModelApiUrl() {
+  return sanitizeModelApiUrl(MODEL_API_URL);
+}
 
 export const scenarios: Record<QualityKey, Scenario> = {
   good: {
@@ -159,13 +173,14 @@ export const priorityRules = [
 ];
 
 export function modelPredictUrl() {
-  return MODEL_API_URL.endsWith("/predict")
-    ? MODEL_API_URL
-    : `${MODEL_API_URL.replace(/\/$/, "")}/predict`;
+  const url = normalizedModelApiUrl();
+  return url.endsWith("/predict")
+    ? url
+    : `${url.replace(/\/$/, "")}/predict`;
 }
 
 export function modelApiBaseUrl() {
-  return MODEL_API_URL.replace(/\/predict$/, "").replace(/\/$/, "");
+  return normalizedModelApiUrl().replace(/\/predict\/?$/, "").replace(/\/$/, "");
 }
 
 export function normalizeQualityKey(label?: string): QualityKey | null {
