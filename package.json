@@ -5,10 +5,10 @@
   "scripts": {
     "clean": "node scripts/clear-next-cache.mjs",
     "predev": "node scripts/clear-next-cache.mjs",
-    "dev": "next dev",
+    "dev": "node api.js && next dev",
     "prebuild": "node scripts/clear-next-cache.mjs",
-    "build": "next build",
-    "start": "next start",
+    "build": "node api.js && next build",
+    "start": "node api.js && next start",
     "test": "vitest run",
     "lint": "next lint"
   },

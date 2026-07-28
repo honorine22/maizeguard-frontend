@@ -60,8 +60,12 @@ export function getSupabaseClient(): SupabaseClient | null {
 
   const config = loadSupabaseConfig();
 
-  if (!config.configured) {
-    console.error("Supabase configuration is missing", {
+  if (
+    !config.configured ||
+    !config.url ||
+    !config.publishableKey
+  ) {
+    console.error("Missing Supabase configuration", {
       urlExists: Boolean(config.url),
       publishableKeyExists: Boolean(
         config.publishableKey
@@ -71,28 +75,19 @@ export function getSupabaseClient(): SupabaseClient | null {
     return null;
   }
 
-  try {
-    supabaseClient = createClient(
-      config.url,
-      config.publishableKey,
-      {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-          detectSessionInUrl: true,
-        },
-      }
-    );
+  supabaseClient = createClient(
+    config.url,
+    config.publishableKey,
+    {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    }
+  );
 
-    return supabaseClient;
-  } catch (error) {
-    console.error(
-      "Could not create Supabase client:",
-      error
-    );
-
-    return null;
-  }
+  return supabaseClient;
 }
 
 export function isSupabaseConfigured(): boolean {
@@ -101,7 +96,7 @@ export function isSupabaseConfigured(): boolean {
   return config.configured;
 }
 
-export async function getCurrentUser() {
+export async function getCurrentUser(): Promise<User | null> {
   const supabase = getSupabaseClient();
 
   if (!supabase) {
@@ -112,15 +107,10 @@ export async function getCurrentUser() {
     await supabase.auth.getUser();
 
   if (error) {
-    console.warn(
-      "Could not retrieve current user:",
-      error.message
-    );
-
     return null;
   }
 
-  return data.user;
+  return data.user ?? null;
 }
 
 export function listenToCurrentUser(
@@ -152,7 +142,7 @@ export function listenToCurrentUser(
     })
     .catch((error) => {
       console.error(
-        "Could not check current user:",
+        "Could not retrieve current user:",
         error
       );
 
@@ -165,20 +155,19 @@ export function listenToCurrentUser(
 }
 
 export async function sendMagicLink(
-  email: string,
-  shouldCreateUser = true
+  email: string
 ): Promise<void> {
   const supabase = getSupabaseClient();
 
   if (!supabase) {
     throw new Error(
-      "Supabase is not configured. Check .env.local and restart Next.js."
+      "Supabase is not configured. Check your environment variables."
     );
   }
 
   if (typeof window === "undefined") {
     throw new Error(
-      "Magic links must be requested from the browser."
+      "Magic links can only be requested from the browser."
     );
   }
 
@@ -188,40 +177,39 @@ export async function sendMagicLink(
     throw new Error("Enter a valid email address.");
   }
 
-  const redirectTo = window.location.origin;
-
-  console.log("Requesting Supabase magic link", {
-    redirectTo,
-    emailProvided: Boolean(cleanEmail),
-  });
+  const redirectTo = `${window.location.origin}/`;
 
   const { error } =
     await supabase.auth.signInWithOtp({
       email: cleanEmail,
       options: {
         emailRedirectTo: redirectTo,
-        shouldCreateUser,
+
+        // Important:
+        // Allow a new user to be created from both
+        // the login and registration pages.
+        shouldCreateUser: true,
       },
     });
 
   if (error) {
-    console.error("Supabase magic-link error", {
-      message: error.message,
-      code: error.code,
-      status: error.status,
-    });
-
-    const errorCode = error.code
-      ? ` (${error.code})`
-      : "";
-
-    throw new Error(
-      `${error.message}${errorCode}`
+    console.error(
+      "Supabase magic-link error:",
+      {
+        name: error.name,
+        message: error.message,
+        code: error.code,
+        status: error.status,
+      }
     );
+
+    // Throw the original Supabase error.
+    // Do not JSON.stringify it because that can produce {}.
+    throw error;
   }
 }
 
-export async function signOutOfSupabase() {
+export async function signOutOfSupabase(): Promise<void> {
   const supabase = getSupabaseClient();
 
   if (!supabase) {
@@ -240,16 +228,32 @@ export async function loadAssessmentHistory(): Promise<
   SavedAssessment[]
 > {
   const supabase = getSupabaseClient();
+
+  if (!supabase) {
+    return [];
+  }
+
   const user = await getCurrentUser();
 
-  if (!supabase || !user) {
+  if (!user) {
     return [];
   }
 
   const { data, error } = await supabase
     .from("assessments")
     .select(
-      "id,label,raw_label,risk,confidence,action,file_name,image_width,image_height,created_at"
+      [
+        "id",
+        "label",
+        "raw_label",
+        "risk",
+        "confidence",
+        "action",
+        "file_name",
+        "image_width",
+        "image_height",
+        "created_at",
+      ].join(",")
     )
     .eq("user_id", user.id)
     .order("created_at", {
@@ -258,23 +262,29 @@ export async function loadAssessmentHistory(): Promise<
     .limit(8);
 
   if (error) {
+    console.error(
+      "Could not load assessment history:",
+      error
+    );
+
     throw error;
   }
 
-  return data ?? [];
+  return (data ?? []) as unknown as SavedAssessment[];
 }
 
 export async function saveAssessment(
   assessment: SavedAssessmentInput
-) {
+): Promise<SavedAssessment> {
   const supabase = getSupabaseClient();
-  const user = await getCurrentUser();
 
   if (!supabase) {
     throw new Error(
       "Supabase is not configured."
     );
   }
+
+  const user = await getCurrentUser();
 
   if (!user) {
     throw new Error(
@@ -284,27 +294,35 @@ export async function saveAssessment(
 
   const payload = {
     user_id: user.id,
+
     label:
       assessment.result.label ??
       "Needs review",
+
     raw_label:
       assessment.result.rawLabel ?? null,
+
     risk: String(
       assessment.result.risk ??
         "Needs review"
     ),
+
     confidence: Number(
       assessment.result.confidence ?? 0
     ),
+
     action:
       assessment.result.action ??
       "Review result",
+
     file_name:
-      assessment.fileName ??
-      assessment.upload?.name ??
+      assessment.fileName ||
+      assessment.upload?.name ||
       "uploaded-image",
+
     image_width:
       assessment.upload?.width ?? null,
+
     image_height:
       assessment.upload?.height ?? null,
   };
@@ -313,13 +331,29 @@ export async function saveAssessment(
     .from("assessments")
     .insert(payload)
     .select(
-      "id,label,raw_label,risk,confidence,action,file_name,image_width,image_height,created_at"
+      [
+        "id",
+        "label",
+        "raw_label",
+        "risk",
+        "confidence",
+        "action",
+        "file_name",
+        "image_width",
+        "image_height",
+        "created_at",
+      ].join(",")
     )
     .single();
 
   if (error) {
+    console.error(
+      "Could not save assessment:",
+      error
+    );
+
     throw error;
   }
 
-  return data;
+  return data as unknown as SavedAssessment;
 }

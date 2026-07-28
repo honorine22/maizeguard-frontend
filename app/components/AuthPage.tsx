@@ -44,8 +44,8 @@ export function AuthPage({
 
   const description =
     mode === "login"
-      ? "Use your email to return to your saved maize screening history."
-      : "Create passwordless access so each assessment can be saved under your account.";
+      ? "Enter your email and we will send you a secure link to access MaizeGuard."
+      : "Enter your email to create passwordless access and save your maize screening history.";
 
   async function handleSubmit(
     event: FormEvent<HTMLFormElement>
@@ -68,37 +68,49 @@ export function AuthPage({
     setMessage(null);
 
     try {
-      const configured =
-        isSupabaseConfigured();
-
-      if (!configured) {
+      if (!isSupabaseConfigured()) {
         throw new Error(
-          "Supabase environment variables were not loaded. Check .env.local and restart Next.js."
+          "Supabase environment variables were not loaded."
         );
       }
 
-      await sendMagicLink(
-        cleanEmail,
-        mode === "register"
-      );
+      /*
+       * Do not pass:
+       * mode === "register"
+       *
+       * sendMagicLink() now always permits Supabase
+       * to create the user when the email is new.
+       */
+      await sendMagicLink(cleanEmail);
 
       setMessage({
         type: "success",
-        text:
-          mode === "login"
-            ? "Magic link sent. Check your email to log in."
-            : "Registration link sent. Check your email to create your access.",
+        text: "Magic link sent. Check your email and open the link to continue.",
       });
-    } catch (error) {
+    } catch (error: unknown) {
       console.error(
         "Magic-link submission failed:",
         error
       );
 
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "An unknown authentication error occurred.";
+      let errorMessage =
+        "An unknown authentication error occurred.";
+
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      } else if (
+        typeof error === "object" &&
+        error !== null &&
+        "message" in error
+      ) {
+        errorMessage = String(
+          (
+            error as {
+              message?: unknown;
+            }
+          ).message
+        );
+      }
 
       setMessage({
         type: "error",
@@ -133,7 +145,7 @@ export function AuthPage({
             <p className="mt-5 max-w-xl text-base leading-7 text-white/80">
               MaizeGuard stores result
               summaries only: class, risk,
-              confidence, action, file name,
+              confidence, action, file name
               and image dimensions. Raw
               uploaded images are not saved.
             </p>
@@ -172,17 +184,22 @@ export function AuthPage({
 
                   <input
                     value={email}
-                    onChange={(event) =>
+                    onChange={(event) => {
                       setEmail(
                         event.target.value
-                      )
-                    }
+                      );
+
+                      if (message) {
+                        setMessage(null);
+                      }
+                    }}
                     type="email"
                     name="email"
                     autoComplete="email"
                     required
+                    disabled={busy}
                     placeholder="name@example.com"
-                    className="mt-2 w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-primary"
+                    className="mt-2 w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-primary disabled:cursor-not-allowed disabled:bg-gray-100"
                   />
                 </label>
 
@@ -205,6 +222,11 @@ export function AuthPage({
 
               {message ? (
                 <div
+                  role={
+                    message.type === "error"
+                      ? "alert"
+                      : "status"
+                  }
                   aria-live="polite"
                   className={
                     message.type === "success"
@@ -226,7 +248,8 @@ export function AuthPage({
                   <p className="mt-1 text-xs leading-5 text-ink-soft">
                     Supabase sends a secure
                     email link instead of
-                    storing app passwords.
+                    storing an application
+                    password.
                   </p>
                 </div>
 
@@ -237,8 +260,8 @@ export function AuthPage({
                   </div>
 
                   <p className="mt-1 text-xs leading-5 text-ink-soft">
-                    Saved summaries keep each
-                    screening result connected
+                    Saved summaries connect
+                    maize screening results
                     to the signed-in user.
                   </p>
                 </div>
